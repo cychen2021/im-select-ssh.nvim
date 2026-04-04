@@ -21,10 +21,30 @@ Neovim (Lua shim) → autocommand fires → Rust CLI → SSH tunnel → C# clien
 - **InsertLeave**: C# client saves current IME, then sets IME to en-US (1033)
 - **InsertEnter**: C# client restores the previously saved IME
 
+## Project Structure
+
+```
+server/                  Rust CLI (crate: im-select-server)
+├── Cargo.toml           serde + rmp-serde
+└── src/main.rs
+
+client/                  C# console app (ImSelectClient, net10.0)
+├── ImSelectClient.csproj  MessagePack 3.1.4
+└── Program.cs
+
+lua/im-select-ssh/       Neovim plugin modules
+├── init.lua             setup() with InsertLeave/InsertEnter autocommands
+├── config.lua           default options (server_bin, tunnel_port, default_ime)
+└── tunnel.lua           SSH tunnel start/stop
+
+plugin/
+└── im-select-ssh.lua    autoload guard (users call setup() from their config)
+```
+
 ## Build Commands
 
-- **Rust**: `cargo build` / `cargo build --release` / `cargo test`
-- **C#**: `dotnet build` / `dotnet build -c Release` / `dotnet test`
+- **Rust**: `cd server && cargo build` / `cargo build --release` / `cargo test`
+- **C#**: `cd client && dotnet build` / `dotnet build -c Release` / `dotnet test`
 - **Lua**: No build step; installed as a Neovim plugin (e.g., via lazy.nvim or similar)
 
 ## Commit Message Conventions
