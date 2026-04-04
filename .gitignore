@@ -531,3 +531,6 @@ tmp/
 
 # Rust
 target/
+
+# Build output
+dist/
