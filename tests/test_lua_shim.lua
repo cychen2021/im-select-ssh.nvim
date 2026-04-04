@@ -98,6 +98,16 @@ _G.vim = {
   },
 
   g = {},
+
+  uv = {
+    random = function(n)
+      local bytes = {}
+      for i = 1, n do bytes[i] = string.char(math.random(0, 255)) end
+      return table.concat(bytes)
+    end,
+    hrtime = function() return 123456789 end,
+    os_getpid = function() return 42 end,
+  },
 }
 
 -- Add lua/ to package path so require("im-select-ssh...") works
@@ -146,6 +156,43 @@ test("start resolves host from cfg.client_host", function()
   -- Last arg is the host
   assert_eq(cmd[#cmd], "192.168.1.1")
   assert(tunnel.job_id ~= nil, "job_id should be set")
+end)
+
+reset_mock()
+test("start includes BatchMode, ConnectTimeout, StrictHostKeyChecking", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  local cmd = jobs_started[1].cmd
+  local joined = table.concat(cmd, " ")
+  assert(joined:find("BatchMode=yes"), "should include BatchMode=yes")
+  assert(joined:find("ConnectTimeout=10"), "should include ConnectTimeout=10")
+  assert(joined:find("StrictHostKeyChecking=yes"), "should include StrictHostKeyChecking=yes")
+end)
+
+reset_mock()
+test("start stops existing tunnel before starting new one", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host1", tunnel_port = 9876 })
+  local first_id = tunnel.job_id
+  tunnel.start({ client_host = "host2", tunnel_port = 9876 })
+  -- Should have stopped the first tunnel
+  assert_eq(#jobs_stopped, 1, "first tunnel should be stopped")
+  assert_eq(jobs_stopped[1], first_id)
+  -- New tunnel should be running
+  assert(tunnel.job_id ~= first_id, "job_id should be updated")
+end)
+
+reset_mock()
+test("on_exit only clears job_id when matching current job", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  local first_job = jobs_started[1]
+  -- Simulate starting a second tunnel (without going through start, to test on_exit isolation)
+  tunnel.job_id = 99  -- pretend a newer tunnel is now tracked
+  -- Fire on_exit for the first (stale) job
+  first_job.opts.on_exit(first_job.id, 0)
+  -- job_id should NOT be cleared because the exiting job doesn't match
+  assert_eq(tunnel.job_id, 99, "should not clear job_id for stale exit")
 end)
 
 reset_mock()

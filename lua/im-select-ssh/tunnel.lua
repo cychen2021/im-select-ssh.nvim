@@ -3,6 +3,8 @@ local M = {}
 M.job_id = nil
 
 function M.start(cfg)
+  M.stop()
+
   local host = cfg.client_host
   if not host then
     local ssh_client = vim.env.SSH_CLIENT
@@ -17,20 +19,26 @@ function M.start(cfg)
   end
 
   local port = tostring(cfg.tunnel_port)
-  M.job_id = vim.fn.jobstart({
+  local job_id = vim.fn.jobstart({
     "ssh",
     "-R", port .. ":localhost:" .. port,
     "-N",
     "-o", "ExitOnForwardFailure=yes",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", "StrictHostKeyChecking=yes",
     host,
   }, {
-    on_exit = function(_, code)
-      if code ~= 0 and M.job_id then
-        vim.notify("[im-select-ssh] SSH tunnel exited with code " .. code, vim.log.levels.WARN)
+    on_exit = function(exited_job_id, code)
+      if exited_job_id == M.job_id then
+        if code ~= 0 then
+          vim.notify("[im-select-ssh] SSH tunnel exited with code " .. code, vim.log.levels.WARN)
+        end
+        M.job_id = nil
       end
-      M.job_id = nil
     end,
   })
+  M.job_id = job_id
 
   if M.job_id <= 0 then
     vim.notify("[im-select-ssh] Failed to start SSH tunnel", vim.log.levels.ERROR)
