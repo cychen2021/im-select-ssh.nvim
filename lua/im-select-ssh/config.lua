@@ -4,6 +4,8 @@ M.defaults = {
   server_bin = "im-select-server",
   tunnel_port = 9876,
   default_ime = "1033",
+  client_host = nil,
+  pin = nil,
 }
 
 M.current = vim.deepcopy(M.defaults)
