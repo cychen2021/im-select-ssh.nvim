@@ -17,7 +17,7 @@ DIST = ROOT / "dist"
 
 
 def run(cmd: list[str], cwd: Path) -> None:
-    print(f"  → {' '.join(cmd)}")
+    print(f"  > {' '.join(cmd)}")
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
@@ -43,7 +43,7 @@ def build_server(profile: str) -> None:
     dst = DIST / "server"
     dst.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst / binary_name)
-    print(f"  ✓ Copied to {dst / binary_name}")
+    print(f"  OK Copied to {dst / binary_name}")
 
 
 def build_client(profile: str) -> None:
@@ -58,7 +58,7 @@ def build_client(profile: str) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(publish_dir, dst)
-    print(f"  ✓ Copied to {dst}")
+    print(f"  OK Copied to {dst}")
 
 
 def bundle_lua() -> None:
@@ -69,19 +69,14 @@ def bundle_lua() -> None:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
-        print(f"  ✓ Copied {dirname}/ to {dst}")
+        print(f"  OK Copied {dirname}/ to {dst}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build im-select-ssh.nvim")
-    profile_group = parser.add_mutually_exclusive_group()
-    profile_group.add_argument(
-        "--release", action="store_true", default=True,
-        help="Build in release mode (default)",
-    )
-    profile_group.add_argument(
+    parser.add_argument(
         "--debug", action="store_true",
-        help="Build in debug mode",
+        help="Build in debug mode (default: release)",
     )
     parser.add_argument("--skip-server", action="store_true", help="Skip Rust server build")
     parser.add_argument("--skip-client", action="store_true", help="Skip C# client publish")
@@ -104,7 +99,7 @@ def main() -> None:
     if not args.skip_lua:
         bundle_lua()
 
-    print(f"\nDone — artifacts in {DIST}")
+    print(f"\nDone -- artifacts in {DIST}")
 
 
 if __name__ == "__main__":
