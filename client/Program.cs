@@ -28,20 +28,28 @@ public class Response
 
 static class ImSelectRunner
 {
+    const int ProcessTimeoutMs = 5_000;
+
     public static string GetCurrentIme(string imSelectPath)
     {
         var psi = new ProcessStartInfo(imSelectPath)
         {
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
         using var proc = Process.Start(psi)
             ?? throw new Exception("failed to start im-select.exe");
         string output = proc.StandardOutput.ReadToEnd().Trim();
-        proc.WaitForExit();
+        string stderr = proc.StandardError.ReadToEnd().Trim();
+        if (!proc.WaitForExit(ProcessTimeoutMs))
+        {
+            proc.Kill();
+            throw new Exception("im-select.exe timed out");
+        }
         if (proc.ExitCode != 0)
-            throw new Exception($"im-select.exe exited with code {proc.ExitCode}");
+            throw new Exception($"im-select.exe exited with code {proc.ExitCode}: {stderr}");
         return output;
     }
 
@@ -49,14 +57,20 @@ static class ImSelectRunner
     {
         var psi = new ProcessStartInfo(imSelectPath, imeCode)
         {
+            RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
         using var proc = Process.Start(psi)
             ?? throw new Exception("failed to start im-select.exe");
-        proc.WaitForExit();
+        string stderr = proc.StandardError.ReadToEnd().Trim();
+        if (!proc.WaitForExit(ProcessTimeoutMs))
+        {
+            proc.Kill();
+            throw new Exception($"im-select.exe set '{imeCode}' timed out");
+        }
         if (proc.ExitCode != 0)
-            throw new Exception($"im-select.exe set '{imeCode}' exited with code {proc.ExitCode}");
+            throw new Exception($"im-select.exe set '{imeCode}' exited with code {proc.ExitCode}: {stderr}");
     }
 }
 
@@ -72,10 +86,10 @@ class Program
     {
         byte[] lenBuf = new byte[4];
         stream.ReadExactly(lenBuf);
-        int length = BinaryPrimitives.ReadInt32BigEndian(lenBuf);
-        if (length <= 0 || length > MaxFrameBytes)
+        uint length = BinaryPrimitives.ReadUInt32BigEndian(lenBuf);
+        if (length == 0 || length > MaxFrameBytes)
             throw new ProtocolViolationException($"invalid frame length: {length}");
-        byte[] payload = new byte[length];
+        byte[] payload = new byte[(int)length];
         stream.ReadExactly(payload);
         return payload;
     }
@@ -114,10 +128,13 @@ class Program
                     return new Response { Success = true };
 
                 default:
+                    string cmd = req.Command.Length > 64
+                        ? req.Command[..64] + "..."
+                        : req.Command;
                     return new Response
                     {
                         Success = false,
-                        Error = $"unknown command: {req.Command}",
+                        Error = $"unknown command: {cmd}",
                     };
             }
         }
@@ -179,37 +196,51 @@ class Program
 
         for (int i = 0; i < args.Length; i++)
         {
-            switch (args[i])
+            string arg = args[i];
+            if (arg is "--port" or "--pin" or "--im-select-path" or "--default-ime")
             {
-                case "--port" when i + 1 < args.Length:
-                    if (!int.TryParse(args[++i], out port) || port <= 0 || port > 65535)
-                    {
-                        Console.Error.WriteLine($"Invalid port: {args[i]}");
-                        Environment.Exit(1);
-                    }
-                    break;
-                case "--pin" when i + 1 < args.Length:
-                    pin = args[++i];
-                    break;
-                case "--im-select-path" when i + 1 < args.Length:
-                    imSelectPath = args[++i];
-                    break;
-                case "--default-ime" when i + 1 < args.Length:
-                    defaultIme = args[++i];
-                    break;
-                default:
-                    Console.Error.WriteLine($"Unknown argument: {args[i]}");
+                if (i + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine($"{arg} requires a value");
                     PrintUsage();
                     Environment.Exit(1);
-                    break;
+                }
+                string value = args[++i];
+                switch (arg)
+                {
+                    case "--port":
+                        if (!int.TryParse(value, out port) || port <= 0 || port > 65535)
+                        {
+                            Console.Error.WriteLine($"Invalid port: {value}");
+                            Environment.Exit(1);
+                        }
+                        break;
+                    case "--pin":
+                        pin = value;
+                        break;
+                    case "--im-select-path":
+                        imSelectPath = value;
+                        break;
+                    case "--default-ime":
+                        defaultIme = value;
+                        break;
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine($"Unknown argument: {arg}");
+                PrintUsage();
+                Environment.Exit(1);
             }
         }
 
-        if (port == 0 || pin == null)
+        if (port == 0 || string.IsNullOrWhiteSpace(pin))
         {
             PrintUsage();
             Environment.Exit(1);
         }
+
+        pin = pin.Trim();
 
         var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
@@ -233,6 +264,10 @@ class Program
                 client = listener.AcceptTcpClient();
             }
             catch (SocketException) when (cts.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (cts.IsCancellationRequested)
             {
                 break;
             }
