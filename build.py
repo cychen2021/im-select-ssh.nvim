@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
+SERVER_PLUGIN = DIST / "server-plugin"
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -40,7 +41,7 @@ def build_server(profile: str) -> None:
         binary_name += ".exe"
 
     src = ROOT / "server" / "target" / profile / binary_name
-    dst = DIST / "server"
+    dst = SERVER_PLUGIN / "server"
     dst.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst / binary_name)
     print(f"  OK Copied to {dst / binary_name}")
@@ -65,7 +66,7 @@ def bundle_lua() -> None:
     print("\n[3/3] Bundling Lua plugin...")
     for dirname in ("lua", "plugin"):
         src = ROOT / dirname
-        dst = DIST / dirname
+        dst = SERVER_PLUGIN / dirname
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
