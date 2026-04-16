@@ -76,13 +76,13 @@ static class ImSelectRunner
 
 class Program
 {
-    const int MaxFrameBytes = 64 * 1024;
+    internal const int MaxFrameBytes = 64 * 1024;
 
-    static readonly MessagePackSerializerOptions MpOptions =
+    internal static readonly MessagePackSerializerOptions MpOptions =
         MessagePackSerializerOptions.Standard
             .WithSecurity(MessagePackSecurity.UntrustedData);
 
-    static byte[] ReadFrame(NetworkStream stream)
+    internal static byte[] ReadFrame(NetworkStream stream)
     {
         byte[] lenBuf = new byte[4];
         stream.ReadExactly(lenBuf);
@@ -94,7 +94,7 @@ class Program
         return payload;
     }
 
-    static void WriteFrame(NetworkStream stream, byte[] payload)
+    internal static void WriteFrame(NetworkStream stream, byte[] payload)
     {
         byte[] lenBuf = new byte[4];
         BinaryPrimitives.WriteInt32BigEndian(lenBuf, payload.Length);
@@ -103,7 +103,7 @@ class Program
         stream.Flush();
     }
 
-    static Response HandleRequest(
+    internal static Response HandleRequest(
         Request req,
         ref string? savedIme,
         string expectedPin,
@@ -144,7 +144,7 @@ class Program
         }
     }
 
-    static void HandleClient(
+    internal static void HandleClient(
         TcpClient client,
         ref string? savedIme,
         string expectedPin,

@@ -359,6 +359,250 @@ test("VimLeavePre callback stops the tunnel", function()
 end)
 
 ---------------------------------------------------------------------------
+-- Tests: config (additional)
+---------------------------------------------------------------------------
+
+print("\n--- config (additional) ---")
+
+reset_mock()
+test("apply with empty table preserves defaults", function()
+  local config = require("im-select-ssh.config")
+  config.apply({})
+  assert_eq(config.current.server_bin, "im-select-server")
+  assert_eq(config.current.tunnel_port, 9876)
+  assert_eq(config.current.default_ime, "1033")
+  assert_eq(config.current.client_host, nil)
+  assert_eq(config.current.pin, nil)
+end)
+
+reset_mock()
+test("apply does not mutate defaults table", function()
+  local config = require("im-select-ssh.config")
+  config.apply({ tunnel_port = 5555, server_bin = "custom" })
+  assert_eq(config.defaults.tunnel_port, 9876)
+  assert_eq(config.defaults.server_bin, "im-select-server")
+end)
+
+reset_mock()
+test("apply overrides all fields when provided", function()
+  local config = require("im-select-ssh.config")
+  config.apply({
+    server_bin = "custom-bin",
+    tunnel_port = 1111,
+    default_ime = "2052",
+    client_host = "192.168.1.100",
+    pin = "secret",
+  })
+  assert_eq(config.current.server_bin, "custom-bin")
+  assert_eq(config.current.tunnel_port, 1111)
+  assert_eq(config.current.default_ime, "2052")
+  assert_eq(config.current.client_host, "192.168.1.100")
+  assert_eq(config.current.pin, "secret")
+end)
+
+reset_mock()
+test("current is initially a copy of defaults", function()
+  local config = require("im-select-ssh.config")
+  assert_eq(config.current.server_bin, config.defaults.server_bin)
+  assert_eq(config.current.tunnel_port, config.defaults.tunnel_port)
+  config.current.tunnel_port = 9999
+  assert_eq(config.defaults.tunnel_port, 9876)
+end)
+
+---------------------------------------------------------------------------
+-- Tests: tunnel (additional)
+---------------------------------------------------------------------------
+
+print("\n--- tunnel (additional) ---")
+
+reset_mock()
+test("on_exit with non-zero code notifies warning", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  local job = jobs_started[1]
+  job.opts.on_exit(job.id, 1)
+  assert_eq(#notify_calls, 1, "should notify on non-zero exit")
+  assert_eq(notify_calls[1].level, _G.vim.log.levels.WARN)
+  assert(notify_calls[1].msg:find("exited with code"), "message should mention exit code")
+  assert_eq(tunnel.job_id, nil, "job_id should be cleared")
+end)
+
+reset_mock()
+test("on_exit with zero code does not notify", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  local job = jobs_started[1]
+  job.opts.on_exit(job.id, 0)
+  assert_eq(#notify_calls, 0, "should not notify on clean exit")
+  assert_eq(tunnel.job_id, nil, "job_id should be cleared")
+end)
+
+reset_mock()
+test("start with jobstart returning 0 notifies error", function()
+  local orig = _G.vim.fn.jobstart
+  _G.vim.fn.jobstart = function(cmd, opts)
+    return 0
+  end
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  assert_eq(tunnel.job_id, nil, "job_id should be nil on failure")
+  assert_eq(#notify_calls, 1, "should notify error")
+  assert_eq(notify_calls[1].level, _G.vim.log.levels.ERROR)
+  _G.vim.fn.jobstart = orig
+end)
+
+reset_mock()
+test("start with jobstart returning negative notifies error", function()
+  local orig = _G.vim.fn.jobstart
+  _G.vim.fn.jobstart = function(cmd, opts)
+    return -1
+  end
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  assert_eq(tunnel.job_id, nil, "job_id should be nil on failure")
+  assert_eq(#notify_calls, 1, "should notify error")
+  _G.vim.fn.jobstart = orig
+end)
+
+reset_mock()
+test("start builds correct -R forward spec", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 4567 })
+  local cmd = jobs_started[1].cmd
+  assert_eq(cmd[3], "4567:localhost:4567", "-R arg should be port:localhost:port")
+end)
+
+reset_mock()
+test("start includes -N flag for no remote command", function()
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ client_host = "host", tunnel_port = 9876 })
+  local cmd = jobs_started[1].cmd
+  assert_eq(cmd[4], "-N", "should include -N flag")
+end)
+
+reset_mock()
+test("start with IPv6-style SSH_CLIENT", function()
+  _G.vim.env.SSH_CLIENT = "::1 54321 22"
+  local tunnel = require("im-select-ssh.tunnel")
+  tunnel.start({ tunnel_port = 9876 })
+  assert_eq(#jobs_started, 1)
+  assert_eq(jobs_started[1].cmd[#jobs_started[1].cmd], "::1")
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+---------------------------------------------------------------------------
+-- Tests: init.setup (additional)
+---------------------------------------------------------------------------
+
+print("\n--- init.setup (additional) ---")
+
+reset_mock()
+test("setup with custom server_bin uses it in autocmd commands", function()
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+  local plugin = require("im-select-ssh")
+  plugin.setup({ server_bin = "my-custom-binary" })
+
+  local leave_cb
+  for _, ac in ipairs(autocmds_created) do
+    if ac.event == "InsertLeave" then leave_cb = ac.callback end
+  end
+  leave_cb()
+
+  local cmd = jobs_started[#jobs_started].cmd
+  assert_eq(cmd[1], "my-custom-binary")
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("setup with custom port uses it in autocmd commands", function()
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+  local plugin = require("im-select-ssh")
+  plugin.setup({ tunnel_port = 5555 })
+
+  local leave_cb
+  for _, ac in ipairs(autocmds_created) do
+    if ac.event == "InsertLeave" then leave_cb = ac.callback end
+  end
+  leave_cb()
+
+  local cmd = jobs_started[#jobs_started].cmd
+  assert_eq(cmd[4], "5555")
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("autocmds are all in ImSelectSsh group", function()
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+  local plugin = require("im-select-ssh")
+  plugin.setup({})
+
+  for _, ac in ipairs(autocmds_created) do
+    assert_eq(ac.group, "ImSelectSsh", "autocmd should be in ImSelectSsh group")
+  end
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("generate_pin produces 6-digit string from fallback path", function()
+  local orig_random = _G.vim.uv.random
+  _G.vim.uv.random = nil
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+
+  local plugin = require("im-select-ssh")
+  plugin.setup({})
+  local config = require("im-select-ssh.config")
+  assert(config.current.pin ~= nil, "pin should be set")
+  assert_eq(#config.current.pin, 6, "pin should be 6 digits")
+  assert(tonumber(config.current.pin), "pin should be numeric")
+
+  _G.vim.uv.random = orig_random
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("generate_pin fallback when random returns wrong length", function()
+  local orig_random = _G.vim.uv.random
+  _G.vim.uv.random = function(n) return "ab" end
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+
+  local plugin = require("im-select-ssh")
+  plugin.setup({})
+  local config = require("im-select-ssh.config")
+  assert(config.current.pin ~= nil, "pin should be set")
+  assert_eq(#config.current.pin, 6, "pin should be 6 digits")
+
+  _G.vim.uv.random = orig_random
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("setup with nil opts works", function()
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+  local plugin = require("im-select-ssh")
+  plugin.setup()
+  local config = require("im-select-ssh.config")
+  assert(config.current.pin ~= nil, "pin should be set")
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+reset_mock()
+test("generate_pin works when vim.uv is nil", function()
+  local orig_uv = _G.vim.uv
+  _G.vim.uv = nil
+  _G.vim.loop = nil
+  _G.vim.env.SSH_CLIENT = "10.0.0.1 12345 22"
+
+  local plugin = require("im-select-ssh")
+  plugin.setup({})
+  local config = require("im-select-ssh.config")
+  assert(config.current.pin ~= nil, "pin should be set")
+  assert_eq(#config.current.pin, 6, "pin should be 6 digits")
+
+  _G.vim.uv = orig_uv
+  _G.vim.env.SSH_CLIENT = nil
+end)
+
+---------------------------------------------------------------------------
 -- Summary
 ---------------------------------------------------------------------------
 

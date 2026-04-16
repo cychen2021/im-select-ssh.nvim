@@ -239,4 +239,224 @@ mod tests {
 
         server.join().unwrap();
     }
+
+    #[test]
+    fn request_with_empty_fields() {
+        let req = Request {
+            command: "".into(),
+            pin: "".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&req).unwrap();
+        let decoded: Request = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.command, "");
+        assert_eq!(decoded.pin, "");
+    }
+
+    #[test]
+    fn request_restore_roundtrip() {
+        let req = Request {
+            command: "restore".into(),
+            pin: "short".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&req).unwrap();
+        let decoded: Request = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.command, "restore");
+        assert_eq!(decoded.pin, "short");
+    }
+
+    #[test]
+    fn response_success_without_error_field() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("success", true);
+        let bytes = rmp_serde::to_vec_named(&map).unwrap();
+        let decoded: Response = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(decoded.success);
+        assert!(decoded.error.is_none());
+    }
+
+    #[test]
+    fn send_request_connection_refused() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let req = Request {
+            command: "save_and_switch".into(),
+            pin: "123456".into(),
+        };
+        let err = send_request(port, &req).unwrap_err();
+        assert!(
+            err.starts_with("connect:"),
+            "expected connect error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn framing_restore_roundtrip() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut len_buf = [0u8; 4];
+            conn.read_exact(&mut len_buf).unwrap();
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_buf = vec![0u8; req_len];
+            conn.read_exact(&mut req_buf).unwrap();
+
+            let req: Request = rmp_serde::from_slice(&req_buf).unwrap();
+            assert_eq!(req.command, "restore");
+
+            #[derive(Serialize)]
+            struct Resp {
+                success: bool,
+            }
+            let resp_payload = rmp_serde::to_vec_named(&Resp { success: true }).unwrap();
+            let len = (resp_payload.len() as u32).to_be_bytes();
+            conn.write_all(&len).unwrap();
+            conn.write_all(&resp_payload).unwrap();
+        });
+
+        let request = Request {
+            command: "restore".into(),
+            pin: "mypin".into(),
+        };
+        let resp = send_request(port, &request).unwrap();
+        assert!(resp.success);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn server_returns_error_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut len_buf = [0u8; 4];
+            conn.read_exact(&mut len_buf).unwrap();
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_buf = vec![0u8; req_len];
+            conn.read_exact(&mut req_buf).unwrap();
+
+            #[derive(Serialize)]
+            struct Resp {
+                success: bool,
+                error: Option<String>,
+            }
+            let resp_payload = rmp_serde::to_vec_named(&Resp {
+                success: false,
+                error: Some("invalid pin".into()),
+            })
+            .unwrap();
+            let len = (resp_payload.len() as u32).to_be_bytes();
+            conn.write_all(&len).unwrap();
+            conn.write_all(&resp_payload).unwrap();
+        });
+
+        let request = Request {
+            command: "save_and_switch".into(),
+            pin: "wrong".into(),
+        };
+        let resp = send_request(port, &request).unwrap();
+        assert!(!resp.success);
+        assert_eq!(resp.error.as_deref(), Some("invalid pin"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn server_drops_connection_before_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut len_buf = [0u8; 4];
+            conn.read_exact(&mut len_buf).unwrap();
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_buf = vec![0u8; req_len];
+            conn.read_exact(&mut req_buf).unwrap();
+            drop(conn);
+        });
+
+        let request = Request {
+            command: "save_and_switch".into(),
+            pin: "123456".into(),
+        };
+        let err = send_request(port, &request).unwrap_err();
+        assert!(
+            err.contains("read response length"),
+            "expected read error, got: {err}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn framing_exact_max_size_accepted() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut len_buf = [0u8; 4];
+            conn.read_exact(&mut len_buf).unwrap();
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req_buf = vec![0u8; req_len];
+            conn.read_exact(&mut req_buf).unwrap();
+
+            let big = vec![0xc0u8; MAX_RESPONSE_BYTES];
+            let len = (big.len() as u32).to_be_bytes();
+            conn.write_all(&len).unwrap();
+            conn.write_all(&big).unwrap();
+        });
+
+        let request = Request {
+            command: "restore".into(),
+            pin: "000000".into(),
+        };
+        let err = send_request(port, &request).unwrap_err();
+        assert!(
+            err.contains("deserialize response"),
+            "frame should be accepted but deserialization should fail, got: {err}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn multiple_sequential_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut conn, _) = listener.accept().unwrap();
+                let mut len_buf = [0u8; 4];
+                conn.read_exact(&mut len_buf).unwrap();
+                let req_len = u32::from_be_bytes(len_buf) as usize;
+                let mut req_buf = vec![0u8; req_len];
+                conn.read_exact(&mut req_buf).unwrap();
+
+                #[derive(Serialize)]
+                struct Resp {
+                    success: bool,
+                }
+                let resp_payload =
+                    rmp_serde::to_vec_named(&Resp { success: true }).unwrap();
+                let len = (resp_payload.len() as u32).to_be_bytes();
+                conn.write_all(&len).unwrap();
+                conn.write_all(&resp_payload).unwrap();
+            }
+        });
+
+        for cmd in &["save_and_switch", "restore", "save_and_switch"] {
+            let request = Request {
+                command: cmd.to_string(),
+                pin: "123".into(),
+            };
+            let resp = send_request(port, &request).unwrap();
+            assert!(resp.success, "request '{cmd}' should succeed");
+        }
+
+        server.join().unwrap();
+    }
 }
